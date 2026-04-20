@@ -26,7 +26,8 @@ def load_and_filter_corpus(filepath="data/climate_articles.csv"):
     """
     # TODO: Load the CSV, filter rows where language == 'en',
     #       return the filtered DataFrame
-    pass
+    df = pd.read_csv(filepath)
+    return df[df["language"] == "en"].reset_index(drop=True)
 
 
 def run_ner_pipeline(texts):
@@ -40,7 +41,13 @@ def run_ner_pipeline(texts):
     """
     # TODO: Load the spaCy model, process each text,
     #       extract entities into a DataFrame
-    pass
+    nlp = spacy.load("en_core_web_sm")
+    records = []
+    for text_id, text in texts:
+        doc = nlp(text)
+        for ent in doc.ents:
+            records.append({"text_id": text_id, "entity_text": ent.text, "entity_label": ent.label_})
+    return pd.DataFrame(records, columns=["text_id", "entity_text", "entity_label"])
 
 
 def aggregate_entity_stats(entity_df):
@@ -61,7 +68,38 @@ def aggregate_entity_stats(entity_df):
     """
     # TODO: Count entity frequencies, find top 20, compute label
     #       totals, and build co-occurrence pairs
-    pass
+    freq = (
+        entity_df.groupby(["entity_text", "entity_label"])
+        .size()
+        .reset_index(name="count")
+        .sort_values("count", ascending=False)
+    )
+    top_entities = freq.head(20).reset_index(drop=True)
+
+    label_counts = entity_df.groupby("entity_label").size().to_dict()
+
+    # Build co-occurrence: pairs of distinct entities in the same text
+    co_pairs = []
+    for _, group in entity_df.groupby("text_id"):
+        unique_entities = group["entity_text"].unique().tolist()
+        for i in range(len(unique_entities)):
+            for j in range(i + 1, len(unique_entities)):
+                a, b = sorted([unique_entities[i], unique_entities[j]])
+                co_pairs.append((a, b))
+
+    if co_pairs:
+        co_df = (
+            pd.DataFrame(co_pairs, columns=["entity_a", "entity_b"])
+            .groupby(["entity_a", "entity_b"])
+            .size()
+            .reset_index(name="co_count")
+            .sort_values("co_count", ascending=False)
+            .reset_index(drop=True)
+        )
+    else:
+        co_df = pd.DataFrame(columns=["entity_a", "entity_b", "co_count"])
+
+    return {"top_entities": top_entities, "label_counts": label_counts, "co_occurrence": co_df}
 
 
 def visualize_entity_distribution(stats, output_path="entity_distribution.png"):
@@ -74,7 +112,15 @@ def visualize_entity_distribution(stats, output_path="entity_distribution.png"):
     """
     # TODO: Create a horizontal bar chart of top entities, labeled
     #       by entity type, save to output_path
-    pass
+    top = stats["top_entities"]
+    labels = top["entity_text"] + " (" + top["entity_label"] + ")"
+    fig, ax = plt.subplots(figsize=(10, 8))
+    ax.barh(labels[::-1], top["count"][::-1])
+    ax.set_xlabel("Frequency")
+    ax.set_title("Top 20 Entities by Frequency")
+    plt.tight_layout()
+    plt.savefig(output_path)
+    plt.close(fig)
 
 
 def generate_report(stats, co_occurrence):
@@ -90,7 +136,34 @@ def generate_report(stats, co_occurrence):
         pairs, and a brief summary.
     """
     # TODO: Build a formatted report string from the statistics
-    pass
+    lines = ["=== Entity Analysis Report ===", ""]
+
+    lines.append("Entity Counts per Type:")
+    for label, count in sorted(stats["label_counts"].items(), key=lambda x: -x[1]):
+        lines.append(f"  {label}: {count}")
+
+    lines.append("")
+    lines.append("Top 5 Most Frequent Entities:")
+    for _, row in stats["top_entities"].head(5).iterrows():
+        lines.append(f"  {row['entity_text']} ({row['entity_label']}): {row['count']}")
+
+    lines.append("")
+    lines.append("Top 3 Co-occurring Pairs:")
+    if co_occurrence is not None and len(co_occurrence) > 0:
+        for _, row in co_occurrence.head(3).iterrows():
+            lines.append(f"  {row['entity_a']} & {row['entity_b']}: {row['co_count']}")
+    else:
+        lines.append("  No co-occurrence data available.")
+
+    lines.append("")
+    total_entities = sum(stats["label_counts"].values())
+    num_types = len(stats["label_counts"])
+    lines.append(
+        f"Summary: {total_entities} total entities across {num_types} types. "
+        f"Most common type: {max(stats['label_counts'], key=stats['label_counts'].get)}."
+    )
+
+    return "\n".join(lines)
 
 
 if __name__ == "__main__":
